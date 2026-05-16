@@ -3,11 +3,19 @@ import sys
 import os
 import time
 
-# 常量定义
-SERV_PORT = 34000
-SERV_ADDR = "127.0.0.1"
-BUFFER_SIZE = 1048576  # 1MB缓冲区
-EXIT_FLAG = "+++"
+"""
+安全风险注释：
+1. 文件名校验仅简单拦截..，路径穿越漏洞防护不全
+2. 客户端与服务端明文传输数据，存在窃听风险
+3. 未校验接收文件内容，存在写入恶意文件隐患
+"""
+
+# 常量定义 【修改：规范常量命名，消除魔法数字】
+DEFAULT_SERVER_PORT = 34000        # 预设服务端通信端口
+DEFAULT_SERVER_IP = "127.0.0.1"    # 默认本地服务地址
+BUFFER_SIZE_1M = 1048576           # 定义1MB数据接收缓冲区大小
+CLIENT_EXIT_CHAR = "+++"           # 定义客户端退出指令标识
+
 
 # 工具函数
 def print_welcome():
@@ -15,8 +23,8 @@ def print_welcome():
     print("=" * 50)
     print(" Simple TCP File Client ")
     print("=" * 50)
-    print(f"Server Address: {SERV_ADDR}:{SERV_PORT}")
-    print(f"Enter '{EXIT_FLAG}' to exit")
+    print(f"Server Address: {DEFAULT_SERVER_IP}:{DEFAULT_SERVER_PORT}")
+    print(f"Enter '{CLIENT_EXIT_CHAR}' to exit")
     print("=" * 50)
 
 
@@ -52,7 +60,8 @@ def receive_file(sockfd, fp):
 
     while True:
         try:
-            data = sockfd.recv(BUFFER_SIZE)
+            # 【修改：使用命名常量替代原始数字】
+            data = sockfd.recv(BUFFER_SIZE_1M)
         except socket.timeout:
             print("[WARNING] Receive timeout")
             break
@@ -88,9 +97,9 @@ def connect_server():
     try:
         sockfd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         print(f"[DEBUG] Socket FD: {sockfd.fileno()}")
-
-        sockfd.connect((SERV_ADDR, SERV_PORT))
-        print(f"[INFO] Connected to server {SERV_ADDR}:{SERV_PORT}")
+        # 【修改：使用规范命名常量连接服务端】
+        sockfd.connect((DEFAULT_SERVER_IP, DEFAULT_SERVER_PORT))
+        print(f"[INFO] Connected to server {DEFAULT_SERVER_IP}:{DEFAULT_SERVER_PORT}")
 
         return sockfd
 
@@ -116,8 +125,8 @@ def main():
         while True:
             filename = input("\nPlease enter the required document: ").strip()
 
-            # 退出条件
-            if filename == EXIT_FLAG:
+            # 【修改：使用定义好的退出标识常量】
+            if filename == CLIENT_EXIT_CHAR:
                 print("[INFO] Exit command received")
                 break
 
