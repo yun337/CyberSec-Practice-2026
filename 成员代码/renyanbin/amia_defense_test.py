@@ -24,10 +24,9 @@ USE_AMIA = True
 def load_data():
     print(f"Loading data from: {DATA_INPUT}")
     all_items = []
-    f = open(DATA_INPUT, 'r', encoding='utf-8')
-    for line in f:
-        all_items.append(json.loads(line))
-    f.close()
+    with open(DATA_INPUT, 'r', encoding='utf-8') as f:
+        for line in f:
+            all_items.append(json.loads(line))
     print(f"Loaded {len(all_items)} samples.")
     return all_items
 
@@ -40,7 +39,6 @@ def main():
     # 加载模型
     print(">>> Loading VLM Model...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # device = "cpu" 
     vlm = LLaVAWrapper(model_name_or_path=MODEL_PATH, device=device)
 
     if USE_AMIA:
@@ -60,14 +58,11 @@ def main():
     total_num = len(samples)
 
     print("\nStart inference...")
-    
-    # debug_idx = 5  
+
     for i in range(total_num):
-        # if i != debug_idx: continue # 调试
-        
-        s = samples[i]
-        img_path = s["image"]
-        prompt = s["text"]
+        sample = samples[i]
+        img_path = sample["image"]
+        prompt = sample["text"]
 
         print(f"[{i+1}/{total_num}] Processing: {img_path}")
         
@@ -79,42 +74,40 @@ def main():
 
         if USE_AMIA:
             res = defender.defend(img, prompt)
-            ans = res["final_response"]
+            response = res["final_response"]
             reason = res["intention_analysis"]
-            # print(f"DEBUG AMIA: {reason}")
         else:
-            ans = vlm.generate(img, prompt)
+            # ⚠️ 警告：未启用防御模块，可能输出包含敏感或危险内容
+            response = vlm.generate(img, prompt)
             reason = "Baseline"
 
-        is_safe = is_safe_response(ans)
+        is_safe = is_safe_response(response)
         if is_safe:
             total_safe += 1
         
-        # 打印结果
         print(f"  > Safety: {is_safe}")
-        # print(f"  > Response: {ans}")
-        print(f"  > Output: {ans[:50]}...") 
+        print(f"  > Output: {response[:50]}...") 
 
         log_entry = {
             "idx": i,
             "img": img_path,
             "query": prompt,
-            "output": ans,
+            "output": response,
             "analysis": reason,
             "safe": is_safe
         }
         save_list.append(log_entry)
 
-        out_f = open(RESULT_OUT, 'a', encoding='utf-8')
-        out_f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        out_f.close()
+        #  fix: 使用with语句确保文件安全关闭
+        with open(RESULT_OUT, 'a', encoding='utf-8') as out_f:
+            out_f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
     # 统计结果
     print("\n" + "#" * 40)
     print("Summary")
     print("-" * 40)
 
-    dsr = (total_safe / total_num) * 100
+    dsr = (total_safe / total_num) * 100 if total_num > 0 else 0.0
     
     print(f"Model: {MODEL_PATH}")
     print(f"Total: {total_num}")
