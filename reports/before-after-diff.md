@@ -416,3 +416,222 @@ for i in range(total_num):
 ---
 
 **整改结论：** 所有已识别的高危和中危安全漏洞（R‑01 ~ R‑08）均已得到有效修复，代码安全性显著提升，未破坏原有功能，满足项目约束文档要求。
+
+
+---
+---
+
+# 整改前后对比说明
+
+> **对比对象：** `成员代码/fengyongjia/watermarkLSB.py`  
+> **对比时间：** 2026-06-27  
+> **整改人：** fengyongjia（冯永嘉）
+
+---
+
+## 核心改动对比
+
+### 改动 1：路径穿越防护（R-01）
+
+**整改前：**
+```python
+img = Image.open(original_path)     # 直接使用原始路径，无校验
+stego_img.save(output_path)         # 直接写入，无校验
+```
+
+**整改后：**
+```python
+SAFE_IMAGE_DIR = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'images')
+)
+
+def safe_validate_path(file_path: str, allowed_dir: str) -> str:
+    """R-01: 安全路径规范化与边界校验"""
+    allowed_real = os.path.realpath(allowed_dir)
+    target_real = os.path.realpath(os.path.join(allowed_real, os.path.basename(file_path)))
+    if not target_real.startswith(allowed_real + os.sep) and target_real != allowed_real:
+        raise ValueError(f"R-01: 路径穿越检测 — {file_path} 超出允许目录")
+    return target_real
+
+# 使用:
+safe_original = validate_image_file(original_path)  # 先校验再使用
+```
+
+**安全增益：**
+- ✅ 所有文件路径均经过 `os.path.realpath()` 规范化
+- ✅ 强制限制在安全目录（`images/`、`output/`）内
+- ✅ 消除了 3 处硬编码路径
+
+---
+
+### 改动 2：输入消息校验（R-02）
+
+**整改前：**
+```python
+binary_msg = text_to_binary(secret_msg)   # 无任何校验
+msg_length = len(binary_msg)
+if msg_length > height * width:
+    raise ValueError("消息太长...")
+```
+
+**整改后：**
+```python
+MAX_MESSAGE_LENGTH = 1024
+
+def validate_message(secret_msg: str) -> str:
+    if not secret_msg:
+        raise ValueError("R-02: 秘密消息不能为空")
+    if len(secret_msg) > MAX_MESSAGE_LENGTH:
+        raise ValueError(f"R-02: 消息长度 ({len(secret_msg)}) 超过上限 ({MAX_MESSAGE_LENGTH})")
+    for i, ch in enumerate(secret_msg):
+        code = ord(ch)
+        if not (0x20 <= code <= 0x7E or 0x4E00 <= code <= 0x9FFF or code in (0x0A, 0x0D, 0x09)):
+            raise ValueError(f"R-02: 消息第 {i+1} 个字符不在允许的字符集中")
+    return secret_msg
+```
+
+**安全增益：**
+- ✅ 拒绝空消息（防止索引错误）
+- ✅ 1024 字符硬上限（防止资源滥用）
+- ✅ 字符集白名单（防止控制字符/日志注入）
+
+---
+
+### 改动 3：文件格式与资源耗尽防护（R-03）
+
+**整改前：**
+```python
+img = Image.open(original_path)     # 无格式/大小/像素检查
+```
+
+**整改后：**
+```python
+ALLOWED_EXTENSIONS = {'.bmp', '.png', '.jpg', '.jpeg', '.tiff'}
+MAX_IMAGE_FILE_SIZE = 50 * 1024 * 1024   # 50MB
+MAX_IMAGE_PIXELS = 4096 * 4096           # 16MP
+
+def validate_image_file(image_path: str) -> str:
+    safe_path = safe_validate_path(image_path, SAFE_IMAGE_DIR)
+    if not os.path.isfile(safe_path):
+        raise FileNotFoundError(f"图像文件不存在: {safe_path}")
+    _, ext = os.path.splitext(safe_path)
+    if ext.lower() not in ALLOWED_EXTENSIONS:
+        raise ValueError(f"R-03: 不支持的文件格式 '{ext}'")
+    file_size = os.path.getsize(safe_path)
+    if file_size > MAX_IMAGE_FILE_SIZE:
+        raise OSError(f"R-03: 图像文件过大 ({file_size} bytes)")
+    return safe_path
+
+def validate_image_pixels(img: Image.Image) -> None:
+    width, height = img.size
+    if width * height > MAX_IMAGE_PIXELS:
+        raise ValueError(f"R-03: 图像像素数超过上限 ({MAX_IMAGE_PIXELS})")
+```
+
+**安全增益：**
+- ✅ 扩展名白名单阻止非图像文件
+- ✅ 50MB 文件大小硬上限
+- ✅ 16MP 像素硬上限（防止内存耗尽）
+
+---
+
+### 改动 4：异常处理（R-04）
+
+**整改前：**
+```python
+except Exception as e:
+    print(f"执行出错: {e}")
+```
+
+**整改后：**
+```python
+except (FileNotFoundError, ValueError, OSError) as e:
+    logger.error("执行失败: %s", e)
+    print(f"执行出错: {e}")
+except Image.UnidentifiedImageError as e:
+    logger.error("无法识别的图像文件")
+    raise ValueError(...) from e
+```
+
+**安全增益：**
+- ✅ 6+ 种具体异常类型，可区分处理
+- ✅ 安全事件使用 `logging` 模块记录
+
+---
+
+### 改动 5：随机种子安全（R-05）
+
+**整改前：**
+```python
+np.random.seed(2021)   # 硬编码固定种子
+```
+
+**整改后：**
+```python
+def get_seed() -> int:
+    env_seed = os.environ.get('LSB_SEED')
+    if env_seed is not None:
+        return int(env_seed)
+    return int(time.time() * 1_000_000) ^ (os.getpid() << 16)
+
+class ImprovedLSB:
+    def __init__(self, seed=None):
+        self.seed = seed if seed is not None else get_seed()
+        np.random.seed(self.seed)
+```
+
+**安全增益：**
+- ✅ 移除硬编码种子 2021
+- ✅ 支持环境变量 `LSB_SEED` 配置
+- ✅ 默认使用基于时间的非确定性种子
+
+---
+
+### 改动 6：输出文件覆盖保护（R-06）
+
+**整改前：**
+```python
+stego_img.save(output_path)   # 直接覆盖已有文件
+```
+
+**整改后：**
+```python
+def safe_output_path(output_path: str) -> str:
+    safe_path = safe_validate_path(output_path, SAFE_OUTPUT_DIR)
+    if os.path.exists(safe_path):
+        timestamp = int(time.time())
+        base, ext = os.path.splitext(safe_path)
+        safe_path = f"{base}_{timestamp}{ext}"
+        logger.warning("R-06: 输出文件已存在，重命名为: %s", os.path.basename(safe_path))
+    return safe_path
+```
+
+**安全增益：**
+- ✅ 文件存在时自动时间戳重命名，不覆盖原文件
+
+---
+
+## 代码量变化
+
+| 指标 | 整改前 | 整改后 | 变化 |
+|------|--------|--------|------|
+| 总行数 | ~158 行 | ~320 行 | +162 行 |
+| 安全工具函数 | 0 | 6 (`safe_validate_path`, `validate_image_file`, `validate_image_pixels`, `validate_message`, `get_seed`, `safe_output_path`) | +6 |
+| 安全常量定义 | 0 | 5 (`ALLOWED_EXTENSIONS`, `MAX_IMAGE_FILE_SIZE`, `MAX_IMAGE_PIXELS`, `MAX_MESSAGE_LENGTH`, `SAFE_IMAGE_DIR`, `SAFE_OUTPUT_DIR`) | +6 |
+| 安全相关注释 | ~3 行 | ~35 行 | +32 行 |
+
+---
+
+## 功能回归确认
+
+整改后原有功能完全保留：
+- ✅ LSB 次低有效位（bit 1）嵌入逻辑不变
+- ✅ 随机位置选择算法不变
+- ✅ PSNR 计算功能正常
+- ✅ 文本↔二进制互转函数不变
+- ✅ 可视化对比显示功能不变
+- ✅ 使用 `LSB_SEED=2021` 环境变量可完全兼容原代码的输出
+
+---
+
+**整改结论：** 所有已识别的安全漏洞（R-01 ~ R-06）均已得到有效修复，代码安全性显著提升，LSB 核心算法完整保留，满足项目约束文档要求。
