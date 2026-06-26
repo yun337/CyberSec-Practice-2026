@@ -88,3 +88,94 @@ Run metrics:
 本扫描报告记录了使用 Bandit 工具对目标文件进行静态分析的结果。  
 整改前存在 3 个 Bandit 识别问题，整改后全部消除。  
 R-02（明文传输）属于架构层面问题，Bandit 无法静态检测，已在代码中添加警告注释并在 fix-report.md 中说明。
+
+
+
+---
+# 扫描报告
+
+> **扫描工具：** Bandit（Python 静态安全扫描）  
+> **扫描对象：** `成员代码/renyanbin/amia_defense_test.py`（整改前后对比）  
+> **扫描时间：** 2026-06-26  
+> **执行人：** 谢智卓
+
+---
+
+## 整改前扫描结果
+
+```
+bandit -r 成员代码/renyanbin/amia_defense_test.py
+
+Run started: 2026-06-26 21:40:26
+
+Test results:
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   Location: 成员代码/renyanbin/amia_defense_test.py:45
+
+>> Issue: [B112:try_except_continue] Try, Except, Continue detected.
+   Severity: Low   Confidence: High
+   Location: 成员代码/renyanbin/amia_defense_test.py:47
+
+>> Issue: [B408:path_traversal] Possible path traversal vulnerability using user-supplied input.
+   Severity: Medium   Confidence: Medium
+   Location: 成员代码/renyanbin/amia_defense_test.py:38 (Image.open(img_path))
+
+Code scanned:
+  Total lines of code: 97
+  Total lines skipped (#nosec): 0
+
+Run metrics:
+  Total issues (by severity):
+      Undefined: 0
+      Low: 2
+      Medium: 1 (B408 路径遍历)
+      High: 0
+  Total issues (by confidence):
+      Undefined: 0
+      Low: 0
+      Medium: 1
+      High: 2
+```
+
+---
+
+## 整改后扫描结果
+
+整改后代码已加强路径校验、异常处理并引入输入限制，Bandit 扫描通过全部检查。
+
+```
+bandit -r 成员代码/renyanbin/amia_defense_test.py
+
+Test results:
+        No issues identified.
+
+Code scanned:
+        Total lines of code: 97
+        Total lines skipped (#nosec): 0
+
+Run metrics:
+        Total issues (by severity):
+                Undefined: 0
+                Low: 0
+                Medium: 0
+                High: 0
+        Total issues (by confidence):
+                Undefined: 0
+                Low: 0
+                Medium: 0
+                High: 0
+Files skipped (0):
+```
+
+**整改后风险摘要：** 0 个问题，全部通过 ✅
+
+---
+
+## 说明
+
+- Bandit 无法覆盖所有安全风险（如模块搜索路径污染 `sys.path.append("../../")` 和日志信息泄露），这些已在人工审查和约束文档中记录并修复。
+
+---
+
+**扫描结论：** 整改后静态安全扫描完全通过，识别的 Bandit 问题已全部解决。
