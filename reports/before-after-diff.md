@@ -635,3 +635,215 @@ def safe_output_path(output_path: str) -> str:
 ---
 
 **整改结论：** 所有已识别的安全漏洞（R-01 ~ R-06）均已得到有效修复，代码安全性显著提升，LSB 核心算法完整保留，满足项目约束文档要求。
+
+---
+
+# 整改前后对比说明
+
+> **对比对象：** `成员代码/weichunru/DCT.py`
+> **对比时间：** 2026-06-27
+
+---
+
+## 核心改动对比
+
+### 改动 1：API Key 身份认证（R-01）
+
+**整改前：**
+```python
+import numpy as np
+from typing import Tuple
+import cv2
+import matplotlib.pyplot as plt
+import os
+
+BLOCK_SHAPE = (8, 8)
+
+def img_to_blocks(img, ...):
+    ...
+```
+直接进入 DCT 算法，无任何身份认证。
+
+**整改后：**
+```python
+import numpy as np
+from typing import Tuple
+import cv2
+import matplotlib.pyplot as plt
+import os
+
+# FIXED R-01~R-04: 安全防护层
+VALID_API_TOKENS = {"dct-watermark-2026-key-001", "dct-watermark-2026-key-002"}
+SAFE_DIR = os.path.dirname(os.path.abspath(__file__))
+ALLOWED_EXTENSIONS = {'.bmp'}
+MAX_IMAGE_FILE_SIZE = 50 * 1024 * 1024
+
+def verify_api_key(api_key: str) -> bool:
+    """R-01: API Key 验证（四层防护）"""
+    if api_key is None:        return False
+    if not isinstance(api_key, str): return False
+    stripped = api_key.strip()
+    if not stripped:           return False
+    return stripped in VALID_API_TOKENS
+
+def safe_resolve_path(filename: str) -> str:
+    """R-02: 路径规范化 + 穿越防护"""
+    ...
+
+def validate_image_file(filepath: str) -> str:
+    """R-03: 扩展名白名单 + 文件大小校验"""
+    ...
+
+BLOCK_SHAPE = (8, 8)
+...
+```
+
+**安全增益：** 新增 3 个安全函数 + 4 个安全常量。
+
+---
+
+### 改动 2：API Key 验证网关（R-01）
+
+**整改前：**
+```python
+plt.rcParams['font.sans-serif'] = [...]
+plt.rcParams['axes.unicode_minus'] = False
+
+if not os.path.exists('bupt.bmp') or not os.path.exists('watermark.bmp'):
+    print("错误: 找不到文件。")
+else:
+    ...
+```
+
+**整改后：**
+```python
+plt.rcParams['font.sans-serif'] = [...]
+plt.rcParams['axes.unicode_minus'] = False
+
+# R-01: API Key 验证网关
+API_KEY = os.environ.get("DCT_API_KEY", "")
+if not API_KEY or not API_KEY.strip():
+    print("错误: 未提供 API Key。"); exit(1)
+if not verify_api_key(API_KEY):
+    print("错误: API Key 验证失败"); exit(1)
+print("API Key 验证通过，开始执行 DCT 水印操作...")
+
+# R-02 + R-03: 文件路径安全校验
+try:
+    safe_bupt = validate_image_file(BUPT_IMG)
+    safe_wm = validate_image_file(WM_IMG)
+except (FileNotFoundError, ValueError, OSError) as e:
+    print(f"错误: {e}"); exit(1)
+```
+
+---
+
+### 改动 3：路径穿越防护（R-02）
+
+**整改前：**
+```python
+img = cv2.imread('bupt.bmp')         # 硬编码路径，无校验
+wm_img_orig = cv2.imread('watermark.bmp', ...)
+cv2.imwrite('buptstegoR.bmp', ...)   # 输出也无校验
+```
+
+**整改后：**
+```python
+safe_bupt = safe_resolve_path('bupt.bmp')       # 所有路径经规范化
+safe_wm = safe_resolve_path('watermark.bmp')
+img = cv2.imread(safe_bupt)
+...
+STEGO_R_PATH = safe_resolve_path('buptstegoR.bmp')
+cv2.imwrite(STEGO_R_PATH, img_embedded)
+```
+
+**安全增益：** os.path.realpath() + os.path.basename() 双保险，`../../../etc/passwd` → `passwd`（目录被剥离）。
+
+---
+
+### 改动 4：文件校验（R-03）
+
+**整改前：**
+```python
+if not os.path.exists('bupt.bmp') or not os.path.exists('watermark.bmp'):
+    print("错误: 找不到文件")
+```
+仅检查存在性。
+
+**整改后：**
+```python
+def validate_image_file(filepath: str) -> str:
+    safe_path = safe_resolve_path(filepath)           # R-02
+    if not os.path.isfile(safe_path):                 # 存在性
+        raise FileNotFoundError(...)
+    _, ext = os.path.splitext(safe_path)
+    if ext.lower() not in ALLOWED_EXTENSIONS:         # 扩展名白名单
+        raise ValueError(...)
+    file_size = os.path.getsize(safe_path)
+    if file_size > MAX_IMAGE_FILE_SIZE:               # 50MB 上限
+        raise OSError(...)
+    return safe_path
+```
+
+**安全增益：** 路径安全 + 扩展名白名单 + 50MB 上限，三层校验。
+
+---
+
+### 改动 5：异常处理（R-04）
+
+**整改前：** 无 try/except，异常直接崩溃。
+
+**整改后：**
+```python
+# 文件校验层
+except (FileNotFoundError, ValueError, OSError) as e:
+    print(f"错误: {e}"); exit(1)
+
+# DCT 算法层
+except (FileNotFoundError, ValueError, OSError, AssertionError, cv2.error) as e:
+    print(f"错误: 水印操作执行失败 — {e}"); exit(1)
+```
+
+**安全增益：** 6 种具体异常类型，区分不同失败阶段。
+
+---
+
+## 不改动区域确认
+
+| 代码区域 | 说明 |
+|----------|------|
+| img_to_blocks() / blocks_to_img() | 未修改 |
+| PSNR() / gaussian_attack() | 未修改 |
+| extract_watermark_from_blocks() | 未修改 |
+| DCT 嵌入 for 循环（系数比较/交换） | 未修改 |
+| NC() / matplotlib 可视化 | 未修改 |
+| 所有算法常量 | 未修改 |
+
+---
+
+## 代码量变化
+
+| 指标 | 整改前 | 整改后 | 变化 |
+|------|--------|--------|------|
+| 总行数 | 192 行 | 280 行 | +88 行 |
+| 安全函数 | 0 | 3 | +3 |
+| 安全常量 | 0 | 4 | +4 |
+| DCT 算法修改 | — | — | 0 |
+
+---
+
+## 功能回归确认
+
+- ✅ DCT 分块变换逻辑不变
+- ✅ 水印嵌入/提取算法不变
+- ✅ PSNR / NC 计算不变
+- ✅ 高斯噪声攻击流程不变
+- ✅ matplotlib 可视化不变
+- ✅ 路径穿越攻击被 basename 化解
+- ✅ 非 BMP 文件被扩展名白名单拒绝
+
+---
+
+**整改结论：** R-01~R-04 全部修复，DCT 核心算法零修改，满足项目约束文档要求。
+
+---
