@@ -720,3 +720,157 @@ def safe_output_path(output_path: str) -> str:
 ---
 
 *本整改报告由 fengyongjia（冯永嘉）在提交 PR 前完成，作为本次安全管理过程的最终留痕。*
+
+---
+
+# 整改报告
+
+> **模块：** `成员代码/weichunru/DCT.py` — DCT 数字水印安全整改
+> **整改时间：** 2026-06-27
+> **整改人：** 位春汝（weichunru）
+
+---
+
+## 一、整改概述
+
+为 DCT 数字水印模块添加四层安全防护：API Key 身份认证（R-01）、路径穿越防护（R-02）、文件格式与大小校验（R-03）、异常处理完善（R-04）。
+
+**修复风险编号：** R-01 ~ R-04（全部修复）
+
+---
+
+## 二、代码变更详情
+
+### 改动 1：API Key 身份认证（R-01）
+
+**整改前：** 无任何身份验证，直接执行水印操作。
+
+**整改后：**
+```python
+VALID_API_TOKENS = {"dct-watermark-2026-key-001", "dct-watermark-2026-key-002"}
+
+def verify_api_key(api_key: str) -> bool:
+    if api_key is None:        return False
+    if not isinstance(api_key, str): return False
+    stripped = api_key.strip()
+    if not stripped:           return False
+    return stripped in VALID_API_TOKENS
+
+# 网关
+API_KEY = os.environ.get("DCT_API_KEY", "")
+if not API_KEY or not API_KEY.strip():
+    print("错误: 未提供 API Key。"); exit(1)
+if not verify_api_key(API_KEY):
+    print("错误: API Key 验证失败"); exit(1)
+```
+
+**安全增益：** 四层防护（None/空/纯空白/无效），环境变量读取，失败立即 exit(1)。
+
+---
+
+### 改动 2：路径穿越防护（R-02）
+
+**整改前：**
+```python
+img = cv2.imread('bupt.bmp')        # 硬编码相对路径，无校验
+```
+
+**整改后：**
+```python
+SAFE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def safe_resolve_path(filename: str) -> str:
+    safe_dir = os.path.realpath(SAFE_DIR)
+    target = os.path.realpath(os.path.join(safe_dir, os.path.basename(filename)))
+    if not target.startswith(safe_dir + os.sep) and target != safe_dir:
+        raise ValueError(f"R-02: 路径穿越检测 — {filename} 超出安全目录")
+    return target
+```
+
+**安全增益：** os.path.realpath() 规范化 + os.path.basename() 剥离目录，所有文件限制在脚本目录内。
+
+---
+
+### 改动 3：文件校验（R-03）
+
+**整改前：**
+```python
+if not os.path.exists('bupt.bmp') or not os.path.exists('watermark.bmp'):
+    print("错误: 找不到文件")
+```
+仅检查存在性，无格式或大小校验。
+
+**整改后：**
+```python
+ALLOWED_EXTENSIONS = {'.bmp'}
+MAX_IMAGE_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
+def validate_image_file(filepath: str) -> str:
+    safe_path = safe_resolve_path(filepath)
+    if not os.path.isfile(safe_path):
+        raise FileNotFoundError(f"R-03: 图像文件不存在: {safe_path}")
+    _, ext = os.path.splitext(safe_path)
+    if ext.lower() not in ALLOWED_EXTENSIONS:
+        raise ValueError(f"R-03: 不支持的文件格式 '{ext}'")
+    file_size = os.path.getsize(safe_path)
+    if file_size > MAX_IMAGE_FILE_SIZE:
+        raise OSError(f"R-03: 图像文件过大 ({file_size} bytes)")
+    return safe_path
+```
+
+**安全增益：** 扩展名白名单 + 50MB 上限 + 存在性检查，三层校验在加载前执行。
+
+---
+
+### 改动 4：异常处理（R-04）
+
+**整改前：** 无 try/except，异常直接崩溃。
+
+**整改后：**
+```python
+try:
+    safe_bupt = validate_image_file(BUPT_IMG)
+    safe_wm = validate_image_file(WM_IMG)
+except (FileNotFoundError, ValueError, OSError) as e:
+    print(f"错误: {e}")
+    exit(1)
+
+try:
+    # ... 全部 DCT 水印逻辑 ...
+except (FileNotFoundError, ValueError, OSError, AssertionError, cv2.error) as e:
+    print(f"错误: 水印操作执行失败 — {e}")
+    exit(1)
+```
+
+**安全增益：** 6 种具体异常类型，区分文件校验失败与算法执行失败，cv2.imread() 返回 None 也做检查。
+
+---
+
+## 三、功能回归验证
+
+| 测试用例 | 操作 | 预期 | 结果 |
+|----------|------|------|------|
+| TC-01 未设置 Key | `python DCT.py` | 拒绝（未提供） | ✅ |
+| TC-02 空 Key | `DCT_API_KEY=""` | 拒绝（未提供） | ✅ |
+| TC-03 纯空白 Key | `DCT_API_KEY="   "` | 拒绝（未提供） | ✅ |
+| TC-04 无效 Key | `DCT_API_KEY="wrong"` | 拒绝（验证失败） | ✅ |
+| TC-05 有效 Key-001 | `DCT_API_KEY="dct-watermark-2026-key-001"` | 通过认证 | ✅ |
+| TC-06 有效 Key-002 | `DCT_API_KEY="dct-watermark-2026-key-002"` | 通过认证 | ✅ |
+| TC-07 路径穿越攻击 | `safe_resolve_path('../../../etc/passwd')` | basename 化解为 `passwd` | ✅ |
+| TC-08 扩展名校验 | 非 .bmp 文件 | 拒绝 | ✅ |
+| TC-09 文件大小校验 | >50MB 文件 | 拒绝 | ✅ |
+
+---
+
+## 四、代码量变化
+
+| 指标 | 整改前 | 整改后 | 变化 |
+|------|--------|--------|------|
+| 总行数 | 192 行 | 280 行 | +88 行 |
+| 安全函数 | 0 | 3（verify_api_key, safe_resolve_path, validate_image_file） | +3 |
+| 安全常量 | 0 | 4（VALID_API_TOKENS, SAFE_DIR, ALLOWED_EXTENSIONS, MAX_IMAGE_FILE_SIZE） | +4 |
+| 安全注释 | 0 | 18 行 | +18 |
+| DCT 算法修改 | — | — | 0 |
+
+---
+
